@@ -11,7 +11,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass, config_entry: ConfigEntry, async_add_entities):
-    async_add_entities([ DivoomLight(config_entry=config_entry, pixoo=hass.data[DOMAIN][config_entry.entry_id]["pixoo"]) ], True)
+    async_add_entities([
+        DivoomLight(
+            config_entry=config_entry,
+            pixoo=hass.data[DOMAIN][config_entry.entry_id]["pixoo"]
+        )
+    ], True)
 
 
 class DivoomLight(LightEntity):
@@ -52,6 +57,7 @@ class DivoomLight(LightEntity):
             self._brightness = kwargs[ATTR_BRIGHTNESS]
             brightness_percent = int((self._brightness / 255.0) * 100)
             self._pixoo.set_brightness(brightness_percent)
+
         self._state = True
         self._pixoo.set_screen(True)
 
@@ -73,10 +79,19 @@ class DivoomLight(LightEntity):
 
     def _update_state(self) -> None:
         try:
-            self._state = self._pixoo.get_state()
+            # New Pixoo firmware on :9000/divoom_api no longer returns
+            # the real LightSwitch state via Channel/GetAllConf.
+            #
+            # Therefore keep the locally known on/off state instead of
+            # overwriting it with Pixoo.get_state().
+            if self._state is None:
+                self._state = True
+
             brightness_percent = self._pixoo.get_brightness()
             self._brightness = int((brightness_percent / 100.0) * 255)
+
             self._set_available(True)
+
         except Exception as err:
             _LOGGER.debug("Unable to update light state: %s", err)
             self._set_available(False)
