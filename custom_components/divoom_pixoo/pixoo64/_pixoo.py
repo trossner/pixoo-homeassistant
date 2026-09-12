@@ -82,7 +82,7 @@ class Pixoo:
         self.pixel_count = self.size * self.size
 
         # Generate URL
-        self.__url = 'http://{0}/post'.format(address)
+        self.__url = 'http://{0}:9000/divoom_api'.format(address)
 
         # Prefill the buffer
         self.fill()
@@ -316,7 +316,7 @@ class Pixoo:
         }), timeout=self.timeout)
 
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
 
     def set_brightness(self, brightness):
@@ -327,7 +327,7 @@ class Pixoo:
             'Brightness': brightness
         }), timeout=self.timeout)
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
 
     def set_channel(self, channel):
@@ -336,7 +336,7 @@ class Pixoo:
             'SelectIndex': int(channel)
         }), timeout=self.timeout)
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
 
     def set_clock(self, clock_id):
@@ -345,7 +345,7 @@ class Pixoo:
             'ClockId': int(clock_id)
         }), timeout=self.timeout)
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
 
     def set_custom_channel(self, index):
@@ -358,7 +358,7 @@ class Pixoo:
             'CustomPageIndex': index
         }), timeout=self.timeout)
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
 
     def play_gif(self, gif_url):
@@ -368,7 +368,7 @@ class Pixoo:
             'FileName': gif_url
         }), timeout=self.timeout)
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
 
     def set_face(self, face_id):
@@ -380,7 +380,7 @@ class Pixoo:
             'OnOff': 1 if on else 0
         }), timeout=self.timeout)
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
 
     def restart_device(self):
@@ -388,23 +388,45 @@ class Pixoo:
             'Command': 'Device/SysReboot'
         }), timeout=self.timeout)
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
 
     def get_state(self):
-        response = requests.post(self.__url, json.dumps({
-            'Command': 'Channel/GetAllConf'
-        }), timeout=self.timeout)
+        response = requests.post(
+            self.__url,
+            json.dumps({'Command': 'Channel/GetAllConf'}),
+            timeout=self.timeout
+        )
         data = response.json()
         _LOGGER.debug("Device Data (" + str(self.address) + "): " + str(data))
-        return data['LightSwitch'] == 1
+
+        if 'LightSwitch' in data:
+            return data['LightSwitch'] == 1
+
+        # New firmware omits LightSwitch. A successful API response proves
+        # that the Pixoo is reachable; keep Home Assistant available.
+        if data.get('error_code', data.get('ReturnCode', -1)) == 0:
+            return True
+
+        raise RuntimeError("Pixoo did not return a successful status response")
 
     def get_brightness(self):
-        response = requests.post(self.__url, json.dumps({
-            'Command': 'Channel/GetAllConf'
-        }), timeout=self.timeout)
+        response = requests.post(
+            self.__url,
+            json.dumps({'Command': 'Channel/GetAllConf'}),
+            timeout=self.timeout
+        )
         data = response.json()
-        return data['Brightness']
+
+        if 'Brightness' in data:
+            return data['Brightness']
+
+        # New firmware omits Brightness. Return a valid HA fallback instead
+        # of marking the whole integration unavailable.
+        if data.get('error_code', data.get('ReturnCode', -1)) == 0:
+            return 100
+
+        raise RuntimeError("Pixoo did not return a successful brightness response")
 
     def set_screen_off(self):
         self.set_screen(False)
@@ -418,7 +440,7 @@ class Pixoo:
             'EqPosition': equalizer_position
         }), timeout=self.timeout)
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
 
     # buzz_time 	Working time of buzzer in one cycle in milliseconds
@@ -433,7 +455,7 @@ class Pixoo:
             'PlayTotalTime': total_time.total_seconds()*1000
         }), timeout=self.timeout)
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
 
     def __clamp_location(self, xy):
@@ -445,47 +467,46 @@ class Pixoo:
             print(error)
 
     def __load_counter(self):
-        response = requests.post(self.__url, '{"Command": "Draw/GetHttpGifId"}', timeout=self.timeout)
+        # Firmware using :9000/divoom_api no longer returns PicId.
+        # Reset once and maintain the ID locally.
+        self.__counter = 0
+        response = requests.post(
+            self.__url,
+            json.dumps({'Command': 'Draw/ResetHttpGifId'}),
+            timeout=self.timeout
+        )
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
-        else:
-            self.__counter = int(data['PicId'])
-            if self.debug:
-                print('[.] Counter loaded and stored: ' + str(self.__counter))
 
     def __send_buffer(self):
+        self.__counter += 1
 
-        # Add to the internal counter
-        self.__counter = self.__counter + 1
-
-        # Check if we've passed the limit and reset the counter for the animation remotely
-        if self.refresh_connection_automatically and self.__counter >= self.__refresh_counter_limit:
+        if self.__counter >= self.__refresh_counter_limit:
             self.__reset_counter()
             self.__counter = 1
 
-        if self.debug:
-            print(f'[.] Counter set to {self.__counter}')
-            # Simulate this too I suppose
-            self.__buffers_send = self.__buffers_send + 1
-            return
-
-        # Encode the buffer to base64 encoding
-        response = requests.post(self.__url, json.dumps({
-            'Command': 'Draw/SendHttpGif',
-            'PicNum': 1,
-            'PicWidth': self.size,
-            'PicOffset': 0,
-            'PicID': self.__counter,
-            'PicSpeed': 1000,
-            'PicData': str(base64.b64encode(bytearray(self.__buffer)).decode())
-        }), timeout=self.timeout)
+        response = requests.post(
+            self.__url,
+            json.dumps({
+                'Command': 'Draw/SendHttpGif',
+                'PicNum': 1,
+                'PicWidth': self.size,
+                'PicOffset': 0,
+                'PicID': self.__counter,
+                'PicSpeed': 1000,
+                'PicData': str(
+                    base64.b64encode(bytearray(self.__buffer)).decode()
+                )
+            }),
+            timeout=self.timeout
+        )
         data = response.json()
-        if data['error_code'] != 0:
+
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
         else:
-            self.__buffers_send = self.__buffers_send + 1
-
+            self.__buffers_send += 1
             if self.debug:
                 print(f'[.] Pushed {self.__buffers_send} buffers')
 
@@ -496,7 +517,7 @@ class Pixoo:
             'Command': 'Draw/ResetHttpGifId'
         }), timeout=self.timeout)
         data = response.json()
-        if data['error_code'] != 0:
+        if data.get('error_code', data.get('ReturnCode', 0)) != 0:
             self.__error(data)
 
 
