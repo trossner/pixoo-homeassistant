@@ -82,6 +82,13 @@ class Pixoo64(Entity):
             "update_page"
         )
 
+        # Register the next page service
+        platform.async_register_entity_service(
+            'next_page',
+            {},
+            "async_next_page"
+        )
+
         # Continue with the setup
         if DOMAIN in self.hass.data:
             self.hass.data[DOMAIN].setdefault(self._config_entry.entry_id, {})['sensor'] =  self
@@ -346,6 +353,18 @@ class Pixoo64(Entity):
             self._render_page(self.page)
 
         await self.hass.async_add_executor_job(update_current_page)
+
+    async def async_next_page(self):
+        """Immediately switch to the next configured page and restart its timer."""
+        if len(self._pages) == 0:
+            _LOGGER.debug("No configured pages for %s", self._pixoo.address)
+            return
+
+        # Prevent the old page timer from firing after the manual page change.
+        self.cancel_update_task()
+        self._update_task = None
+
+        await self._async_next_page()
 
     def cancel_update_task(self):
         if self._update_task:
